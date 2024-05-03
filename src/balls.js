@@ -5,6 +5,7 @@ import { getRandomInt } from "./utils.js";
 var svg;
 var ballsData = [];
 var ticker = null;
+var memoryUpdateTicker = null;
 var animationStatus = null; // 0 = off/stopped, 1 = on/started
 const containerId = "container";
 const container = document.getElementById(containerId);
@@ -30,9 +31,19 @@ const COLORS_ARRAY = [
     "#defcf9",
 ];
 const REFRESH_INTERVAL = 30; // millisecond
+const MEMORY_UPDATE_INTERVAL = 10000; // millisecond
 const MAX_SPEED = 5; // unit: pixels per REFRESH_INTERVAL
-const NUM_BALLS = 20;
-const RADIUS = getRadiusByMemoryUsage();
+const INITIAL_NUM_BALLS = 20;
+const MAX_RADIUS = 60;
+const INITIAL_RADIUS = 20;
+
+const getRadiusByMemoryUsage = () => {
+    const memory = window.performance.memory;
+    const totalJSHeapSize = memory.totalJSHeapSize;
+    const usedJSHeapSize = memory.usedJSHeapSize;
+    const radius = Math.floor((usedJSHeapSize / totalJSHeapSize) * MAX_RADIUS);
+    return radius;
+};
 
 // initialize canvas, balls data, draw balls, calls update with time interval
 const initialize = () => {
@@ -42,6 +53,7 @@ const initialize = () => {
         .attr("width", containerWidth)
         .attr("height", containerHeight);
     initializeBallsData();
+    // set up click event listener to change color of ball
     svg.on("click", function (event) {
         var clickCoords = d3.pointer(event);
         processColorChanges(clickCoords);
@@ -50,12 +62,18 @@ const initialize = () => {
 };
 
 const initializeBallsData = () => {
-    for (var i = 0; i < NUM_BALLS; i++) {
+    for (var i = 0; i < INITIAL_NUM_BALLS; i++) {
         ballsData.push({
             id: "n" + i.toString(),
-            radius: RADIUS,
-            x: getRandomInt(0 + RADIUS, containerWidth - RADIUS),
-            y: getRandomInt(0 + RADIUS, containerHeight - RADIUS),
+            radius: INITIAL_RADIUS,
+            x: getRandomInt(
+                0 + INITIAL_RADIUS,
+                containerWidth - INITIAL_RADIUS
+            ),
+            y: getRandomInt(
+                0 + INITIAL_RADIUS,
+                containerHeight - INITIAL_RADIUS
+            ),
             dx: getRandomInt(-MAX_SPEED, MAX_SPEED),
             dy: getRandomInt(-MAX_SPEED, MAX_SPEED),
             color: COLORS_ARRAY[0],
@@ -66,31 +84,32 @@ const initializeBallsData = () => {
 // function to update balls data
 const updateData = () => {
     for (let i = 0; i < ballsData.length; i++) {
+        const ballRadius = ballsData[i].radius;
         // check if ball will collide with wall
         // if so, reverse direction
         if (
-            ballsData[i].x + RADIUS >= containerWidth ||
-            ballsData[i].x - RADIUS <= 0
+            ballsData[i].x + ballRadius >= containerWidth ||
+            ballsData[i].x - ballRadius <= 0
         ) {
             ballsData[i].dx *= -1;
         }
         if (
-            ballsData[i].y + RADIUS >= containerHeight ||
-            ballsData[i].y - RADIUS <= 0
+            ballsData[i].y + ballRadius >= containerHeight ||
+            ballsData[i].y - ballRadius <= 0
         ) {
             ballsData[i].dy *= -1;
         }
         // calculate next position
         // push ball away from wall until not colliding
         while (
-            ballsData[i].x + RADIUS >= containerWidth ||
-            ballsData[i].x - RADIUS <= 0
+            ballsData[i].x + ballRadius >= containerWidth ||
+            ballsData[i].x - ballRadius <= 0
         ) {
             ballsData[i].x += ballsData[i].dx;
         }
         while (
-            ballsData[i].y + RADIUS >= containerHeight ||
-            ballsData[i].y - RADIUS <= 0
+            ballsData[i].y + ballRadius >= containerHeight ||
+            ballsData[i].y - ballRadius <= 0
         ) {
             ballsData[i].y += ballsData[i].dy;
         }
@@ -104,9 +123,10 @@ const updateData = () => {
 const processCollisions = () => {
     for (var i = 0; i < ballsData.length; i++) {
         for (var j = i + 1; j < ballsData.length; j++) {
+            const ballRadius = ballsData[i].radius;
             const ball1 = ballsData[i];
             const ball2 = ballsData[j];
-            if (pairCollides(ball1.x, ball1.y, ball2.x, ball2.y)) {
+            if (pairCollides(ball1.x, ball1.y, ball2.x, ball2.y, ballRadius)) {
                 // update velocities (physics is only approximate here)
                 const ux1 = ball1.dx;
                 const uy1 = ball1.dy;
@@ -115,7 +135,9 @@ const processCollisions = () => {
                 ball1.dy = ball2.dy;
                 ball2.dy = uy1;
                 // ensure one ball is not inside the other: we push them apart till not colliding
-                while (pairCollides(ball1.x, ball1.y, ball2.x, ball2.y)) {
+                while (
+                    pairCollides(ball1.x, ball1.y, ball2.x, ball2.y, ballRadius)
+                ) {
                     ball1.x += ball1.dx;
                     ball1.y += ball1.dy;
 
@@ -127,9 +149,9 @@ const processCollisions = () => {
     }
 };
 
-const pairCollides = (x1, y1, x2, y2) => {
+const pairCollides = (x1, y1, x2, y2, ballRadius) => {
     const dist = Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
-    return dist <= 2 * RADIUS;
+    return dist <= 2 * ballRadius;
 };
 
 const processColorChanges = (clickCoords) => {
@@ -140,9 +162,7 @@ const processColorChanges = (clickCoords) => {
         const x2 = clickCoords[0];
         const y2 = clickCoords[1];
         const dist = Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
-        if (dist <= 1.3 * RADIUS) {
-            console.log(clickCoords);
-            console.log(x1, y1);
+        if (dist <= 1.3 * ballsData[i].radius) {
             shiftBallColor(i);
             return; // only process one click
         }
@@ -173,10 +193,20 @@ const transition = () => {
     redraw();
     updateData();
 };
+const redrawWithMemoryRadius = () => {
+    for (var i = 0; i < ballsData.length; i++) {
+        ballsData[i].radius = getRadiusByMemoryUsage();
+    }
+    redraw();
+};
 
 const start = () => {
     initialize();
     ticker = d3.interval(transition, REFRESH_INTERVAL);
+    memoryUpdateTicker = d3.interval(
+        redrawWithMemoryRadius,
+        MEMORY_UPDATE_INTERVAL
+    );
     animationStatus = 1;
     // listen to keyboard press to start/stop game
     d3.select("body").on("keydown", (event) => {
@@ -184,10 +214,15 @@ const start = () => {
             if (animationStatus == 0) {
                 // currently stopped, so restart ticker
                 ticker = d3.interval(transition, REFRESH_INTERVAL);
+                memoryUpdateTicker = d3.interval(
+                    redrawWithMemoryRadius,
+                    MEMORY_UPDATE_INTERVAL
+                );
                 animationStatus = 1;
             } else {
                 // currently started, so stop ticker
                 ticker.stop();
+                memoryUpdateTicker.stop();
                 animationStatus = 0;
             }
         }
